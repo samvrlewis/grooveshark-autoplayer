@@ -17,6 +17,7 @@ using Microsoft.WindowsAPICodePack.Taskbar;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
+using System.Diagnostics;
 
 namespace grooveshark_autoplayer
 {
@@ -26,16 +27,18 @@ namespace grooveshark_autoplayer
     public partial class MainWindow : Window
     {
         IHTMLDocument2 document;
-        bool addedToolbar = false;
-        bool autoPlay = false;
-        AudioPlayingChecker checker;
-        DispatcherTimer timer;
 
-        bool isPlaying = false;
+        bool addedToolbar = false; //flag to check if the toolbar has been added as load completed can get called more than once
+        bool autoPlay = false; //flag for autoplay/pause functionality
 
-        [DllImport("user32.dll")]
-        public static extern IntPtr SendMessageW(IntPtr hWnd, int Msg,
-            IntPtr wParam, IntPtr lParam);
+        AudioPlayingChecker checker; //class that is used to check if other stuff is playing
+        DispatcherTimer timer; //timer to periodically check
+
+        //flag to check whether the client is playing music. 
+        //this is a bit of a stupid flag as it only changes when the toolbar buttons are used to play/pause grooveshark
+        //todo: think of a better way to do this, maybe assume it's playing all the time? or even use audioplayingchecker
+        //to check it through windows
+        bool isPlaying = false; 
 
         public MainWindow()
         {
@@ -43,36 +46,41 @@ namespace grooveshark_autoplayer
             checker = new AudioPlayingChecker();
         }
 
+        //Pauses the grooveshark stream by sending a js command
         public void pause()
         {
             isPlaying = false;
-            timer.IsEnabled = true;
 
             Object[] args = new Object[1];
             args[0] = (Object)"window.Grooveshark.pause();";
             browser.InvokeScript("eval", args);
             args = default(Object[]);
+
+            Debug.WriteLine("Pause");
         }
 
+        //Plays the grooveshark stream by sending a js command
+        //Doesn't work if there's nothing in the queue to play already
         public void play()
         {
             isPlaying = true;
-            timer.IsEnabled = false;
 
             Object[] args = new Object[1];
             args[0] = (Object)"window.Grooveshark.play();";
             browser.InvokeScript("eval", args);
             args = default(Object[]);
+
+            Debug.WriteLine("Play");
         }
 
         private void BrowserLoadCompleted(object sender, NavigationEventArgs e)
         {
-            this.document = browser.Document as IHTMLDocument2;
+            //save a reference to the grooveshark page so we can send js calls to it later
+            this.document = browser.Document as IHTMLDocument2; 
 
-            if (document == null) return;
+            setup_toolbar();
 
-            set_toolbar();
-
+            //setup a timer. this timer checks if anything else is playing and pauses/plays grooveshark based on that
             timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500), IsEnabled = true };
             timer.Tick += TimerTick;
             timer.Start();
@@ -80,13 +88,26 @@ namespace grooveshark_autoplayer
 
         private void TimerTick(object sender, EventArgs e)
         {
-            if (!checker.IsAudioPlaying() && !isPlaying && autoPlay)
+            if (!autoPlay)
+                return;
+            
+            int playing = AudioPlayingChecker.NumberApplicationsPlaying();
+            
+            //Start playing if it's not playing and nothing else is playing
+            //Pause if something else is playing and it is playing
+            if (!isPlaying)
             {
-                this.play();
+                if (playing == 0)
+                    this.play();
+            }
+            else
+            {
+                if (playing > 1)
+                    this.pause();
             }
         }
 
-        private void set_toolbar()
+        private void setup_toolbar()
         {
             if (addedToolbar)
                 return;
@@ -105,11 +126,6 @@ namespace grooveshark_autoplayer
 
             addedToolbar = true;
 
-        }
-
-        private void setup()
-        {
-            
         }
 
         private void MenuItem_Click(object sender, RoutedEventArgs e)
